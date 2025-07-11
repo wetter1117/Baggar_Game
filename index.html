@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Web Beggar - 거지 키우기</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #333;
+            font-family: 'Malgun Gothic', sans-serif;
+            color: #fff;
+        }
+        #game-container {
+            text-align: center;
+        }
+        canvas {
+            border: 2px solid #555;
+            background-color: #f0e6d2;
+            cursor: pointer;
+        }
+        h1 {
+            color: #f0e6d2;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <h1>Web Beggar</h1>
+        <canvas id="gameCanvas" width="400" height="700"></canvas>
+    </div>
+
+<script>
+// =================================================================
+// STEP 1: 게임 초기 설정 및 상태 관리
+// 기획서의 핵심 기능들을 구현하기 위한 기본 변수와 게임 상태를 설정합니다.
+// =================================================================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameState = {
+    gold: 0,
+    goldPerClick: 1,
+    goldPerSecond: 0,
+    ceoLevel: 1,
+    albas:, // { id, level }
+    assets:, // { id, purchasePrice, currentValue }
+    currentScreen: 'main', // main, ceo, alba, asset
+    lastUpdate: Date.now()
+};
+
+// =================================================================
+// STEP 2: 게임 밸런싱 데이터 정의
+// 기획서의 표를 바탕으로 게임의 핵심 수치를 설정합니다.
+// =================================================================
+
+const CEO_CONFIG = {
+    baseCost: 10,
+    costMultiplier: 1.07,
+    powerPerLevel: 1
+};
+
+const ALBA_DATA = [
+    { id: 0, name: '패셔니스타', baseCost: 500, baseGps: 5, costMultiplier: 1.08 },
+    { id: 1, name: '롹커', baseCost: 10000, baseGps: 60, costMultiplier: 1.09 },
+    { id: 2, name: '화가', baseCost: 200000, baseGps: 550, costMultiplier: 1.10 },
+    { id: 3, name: '피아니스트', baseCost: 4000000, baseGps: 4800, costMultiplier: 1.11 },
+    { id: 4, name: '과학자', baseCost: 160000000, baseGps: 610000, costMultiplier: 1.13 }
+];
+
+const ASSET_DATA =;
+
+
+// =================================================================
+// STEP 3: 핵심 유틸리티 함수
+// 게임 전반에 사용될 보조 함수들을 정의합니다. (숫자 포맷팅 등)
+// =================================================================
+
+function formatNumber(num) {
+    num = Math.floor(num);
+    if (num < 10000) return num.toLocaleString();
+    const units = ['', '만', '억', '조', '경'];
+    let unitIndex = 0;
+    while (num >= 10000 && unitIndex < units.length - 1) {
+        num /= 10000;
+        unitIndex++;
+    }
+    return `${num.toFixed(2)} ${units[unitIndex]}`;
+}
+
+// =================================================================
+// STEP 4: 게임 데이터 저장 및 불러오기 (localStorage)
+// 브라우저의 localStorage를 사용하여 게임 진행 상황을 저장하고 불러옵니다. [span_0](start_span)[span_0](end_span)[span_1](start_span)[span_1](end_span)[span_2](start_span)[span_2](end_span)
+// =================================================================
+
+function saveGame() {
+    try {
+        localStorage.setItem('webBeggarSave', JSON.stringify(gameState));
+    } catch (e) {
+        console.error("저장에 실패했습니다.", e);
+    }
+}
+
+function loadGame() {
+    const savedGame = localStorage.getItem('webBeggarSave');
+    if (savedGame) {
+        const loadedState = JSON.parse(savedGame);
+        // 불러온 데이터로 현재 상태를 덮어씁니다.
+        // 단, lastUpdate는 현재 시간으로 초기화하여 오프라인 보상 계산에 사용합니다.
+        const offlineTime = Date.now() - loadedState.lastUpdate;
+        const offlineGold = loadedState.goldPerSecond * (offlineTime / 1000);
+        
+        gameState = loadedState;
+        gameState.lastUpdate = Date.now();
+
+        if (offlineGold > 0) {
+            alert(`미접속 시간 동안 ${formatNumber(offlineGold)} 골드를 획득했습니다!`);
+            gameState.gold += offlineGold;
+        }
+        
+        recalculateGPS(); // GPS를 다시 계산합니다.
+        return true;
+    }
+    return false;
+}
+
+function resetGame() {
+    if (confirm("정말로 모든 진행 상황을 초기화하시겠습니까?")) {
+        localStorage.removeItem('webBeggarSave');
+        // 페이지를 새로고침하여 게임을 처음부터 시작합니다.
+        window.location.reload();
+    }
+}
+
+// =================================================================
+// STEP 5: 렌더링 (화면 그리기)
+// Canvas에 게임의 모든 시각적 요소를 그립니다.
+// =================================================================
+
+// 공통 UI 요소 그리기
+function drawUIFrame(title) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#f0e6d2';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 상단 정보 패널
+    ctx.fillStyle = '#5d4037';
+    ctx.fillRect(0, 0, canvas.width, 50);
+    ctx.fillStyle = '#fff';
+    ctx.font = '14px Malgun Gothic';
+    ctx.textAlign = 'left';
+    ctx.fillText(`골드: ${formatNumber(gameState.gold)}`, 10, 20);
+    ctx.fillText(`클릭당: ${formatNumber(gameState.goldPerClick)}`, 10, 40);
+    ctx.fillText(`초당: ${formatNumber(gameState.goldPerSecond)}`, 150, 40);
+
+    // 하단 네비게이션 탭
+    const tabs = ['사장거지', '알바고용', '자산', '초기화'];
+    tabs.forEach((tab, i) => {
+        ctx.fillStyle = gameState.currentScreen === tab.toLowerCase().replace(' ', '')? '#a1887f' : '#795548';
+        ctx.fillRect(i * 100, 650, 100, 50);
+        ctx.fillStyle = '#fff';
+        ctx.font = '16px Malgun Gothic';
+        ctx.textAlign = 'center';
+        ctx.fillText(tab, i * 100 + 50, 680);
+    });
+
+    // 현재 화면 타이틀
+    ctx.fillStyle = '#3e2723';
+    ctx.font = 'bold 20px Malgun Gothic';
+    ctx.textAlign = 'center';
+    ctx.fillText(title, canvas.width / 2, 80);
+}
+
+// 메인 화면 그리기
+function drawMainScreen() {
+    drawUIFrame("Web Beggar");
+    // 사장 거지 캐릭터 (B급 감성)
+    ctx.strokeStyle = '#3e2723';
+    ctx.lineWidth = 3;
+    // 몸통
+    ctx.beginPath();
+    ctx.moveTo(200, 300);
+    ctx.lineTo(180, 450);
+    ctx.lineTo(220, 450);
+    ctx.closePath();
+    ctx.stroke();
+    // 머리
+    ctx.beginPath();
+    ctx.arc(200, 270, 40, 0, Math.PI * 2);
+    ctx.stroke();
+    // 눈
+    ctx.beginPath();
+    ctx.arc(190, 265, 3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(210, 265, 3, 0, Math.PI * 2);
+    ctx.stroke();
+    // 입
+    ctx.beginPath();
+    ctx.arc(200, 280, 15, 0, Math.PI);
+    ctx.stroke();
+    
+    ctx.fillStyle = '#3e2723';
+    ctx.font = '24px Malgun Gothic';
+    ctx.fillText("클릭해서 돈 벌기!", canvas.width / 2, 200);
+}
+
+// 업그레이드 패널 그리기 (공용)
+function drawUpgradePanel(title, items, type) {
+    drawUIFrame(title);
+    items.forEach((item, i) => {
+        const y = 100 + i * 60;
+        ctx.fillStyle = '#d7ccc8';
+        ctx.fillRect(10, y, 380, 55);
+        
+        ctx.fillStyle = '#3e2723';
+        ctx.font = '16px Malgun Gothic';
+        ctx.textAlign = 'left';
+
+        let level = 0;
+        let cost = 0;
+        let currentEffect = "";
+
+        if (type === 'ceo') {
+            level = gameState.ceoLevel;
+            cost = CEO_CONFIG.baseCost * Math.pow(CEO_CONFIG.costMultiplier, level - 1);
+            currentEffect = `클릭 파워: ${formatNumber(gameState.goldPerClick)}`;
+        } else if (type === 'alba') {
+            const albaState = gameState.albas.find(a => a.id === item.id);
+            level = albaState? albaState.level : 0;
+            cost = item.baseCost * Math.pow(item.costMultiplier, level);
+            const currentGps = level > 0? item.baseGps * level * Math.pow(1.1, level-1) : 0;
+            currentEffect = `초당 ${formatNumber(currentGps)} 골드`;
+        } else if (type === 'asset') {
+            const ownedCount = gameState.assets.filter(a => a.id === item.id).length;
+            level = ownedCount;
+            cost = item.price;
+            const totalValue = gameState.assets.filter(a => a.id === item.id).reduce((sum, a) => sum + a.currentValue, 0);
+            currentEffect = `총 자산가치: ${formatNumber(totalValue)}`;
+        }
+
+        ctx.fillText(`${item.name} (Lv.${level})`, 20, y + 20);
+        ctx.font = '14px Malgun Gothic';
+        ctx.fillText(currentEffect, 20, y + 40);
+
+        // 업그레이드/구매 버튼
+        const canAfford = gameState.gold >= cost;
+        ctx.fillStyle = canAfford? '#8d6e63' : '#bdbdbd';
+        ctx.fillRect(250, y + 5, 130, 45);
+        ctx.fillStyle = '#fff';
+        ctx.font = '14px Malgun Gothic';
+        ctx.textAlign = 'center';
+        const buttonText = (type === 'alba' && level === 0) |
+
+| type === 'asset'? '구매' : '업그레이드';
+        ctx.fillText(buttonText, 315, y + 25);
+        ctx.fillText(`₩ ${formatNumber(cost)}`, 315, y + 45);
+    });
+}
+
+// =================================================================
+// STEP 6: 게임 로직 업데이트
+// 게임의 상태를 시간의 흐름에 따라 갱신합니다. (자동 수입, 자산 가치 상승 등)
+// =================================================================
+
+function recalculateGPS() {
+    let totalGps = 0;
+    gameState.albas.forEach(albaState => {
+        const albaData = ALBA_DATA.find(a => a.id === albaState.id);
+        if (albaData) {
+            // 레벨에 따른 보너스 적용 (예시)
+            totalGps += albaData.baseGps * albaState.level * Math.pow(1.1, albaState.level-1);
+        }
+    });
+    gameState.goldPerSecond = totalGps;
+}
+
+function update(deltaTime) {
+    // 초당 골드 획득
+    if (gameState.goldPerSecond > 0) {
+        gameState.gold += gameState.goldPerSecond * (deltaTime / 1000);
+    }
+
+    // 자산 가치 상승
+    gameState.assets.forEach(asset => {
+        const assetData = ASSET_DATA.find(a => a.id === asset.id);
+        if (assetData) {
+            asset.currentValue += asset.purchasePrice * assetData.valueIncreaseRate * (deltaTime / 1000);
+        }
+    });
+}
+
+// =================================================================
+// STEP 7: 사용자 입력 처리
+// 플레이어의 클릭/탭 입력을 받아 게임 상태를 변경합니다.
+// =================================================================
+
+canvas.addEventListener('click', (event) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+
+    // 하단 네비게이션 탭 클릭 처리
+    if (y >= 650 && y <= 700) {
+        if (x >= 0 && x < 100) gameState.currentScreen = 'ceo';
+        else if (x >= 100 && x < 200) gameState.currentScreen = 'alba';
+        else if (x >= 200 && x < 300) gameState.currentScreen = 'asset';
+        else if (x >= 300 && x < 400) resetGame();
+        return;
+    }
+
+    // 화면별 클릭 처리
+    switch (gameState.currentScreen) {
+        case 'main':
+            // 사장 거지 클릭
+            const dist = Math.sqrt(Math.pow(x - 200, 2) + Math.pow(y - 350, 2));
+            if (dist < 100) {
+                gameState.gold += gameState.goldPerClick;
+            }
+            break;
+        case 'ceo':
+            handleUpgradeClick(x, y, [{...CEO_CONFIG, name: '사장 거지'}], 'ceo');
+            break;
+        case 'alba':
+            handleUpgradeClick(x, y, ALBA_DATA, 'alba');
+            break;
+        case 'asset':
+            handleUpgradeClick(x, y, ASSET_DATA, 'asset');
+            break;
+    }
+});
+
+function handleUpgradeClick(x, y, items, type) {
+    items.forEach((item, i) => {
+        const itemY = 100 + i * 60;
+        // 업그레이드 버튼 영역 확인
+        if (x >= 250 && x <= 380 && y >= itemY + 5 && y <= itemY + 50) {
+            if (type === 'ceo') {
+                const cost = CEO_CONFIG.baseCost * Math.pow(CEO_CONFIG.costMultiplier, gameState.ceoLevel - 1);
+                if (gameState.gold >= cost) {
+                    gameState.gold -= cost;
+                    gameState.ceoLevel++;
+                    gameState.goldPerClick += CEO_CONFIG.powerPerLevel * (gameState.ceoLevel-1); // 레벨당 파워 증가
+                    saveGame();
+                }
+            } else if (type === 'alba') {
+                let albaState = gameState.albas.find(a => a.id === item.id);
+                if (!albaState) {
+                    albaState = { id: item.id, level: 0 };
+                    gameState.albas.push(albaState);
+                }
+                const cost = item.baseCost * Math.pow(item.costMultiplier, albaState.level);
+                if (gameState.gold >= cost) {
+                    gameState.gold -= cost;
+                    albaState.level++;
+                    recalculateGPS();
+                    saveGame();
+                }
+            } else if (type === 'asset') {
+                const cost = item.price;
+                if (gameState.gold >= cost) {
+                    gameState.gold -= cost;
+                    gameState.assets.push({
+                        id: item.id,
+                        purchasePrice: cost,
+                        currentValue: cost
+                    });
+                    saveGame();
+                }
+            }
+        }
+    });
+}
+
+
+// =================================================================
+// STEP 8: 게임 루프 실행
+// 게임의 심장. update와 render 함수를 지속적으로 호출합니다.
+// =================================================================
+
+function gameLoop() {
+    const now = Date.now();
+    const deltaTime = now - gameState.lastUpdate;
+    gameState.lastUpdate = now;
+
+    update(deltaTime);
+
+    // 현재 화면에 맞는 렌더링 함수 호출
+    switch (gameState.currentScreen) {
+        case 'main':
+            drawMainScreen();
+            break;
+        case 'ceo':
+            drawUpgradePanel("사장 거지 강화", [{...CEO_CONFIG, name: '사장 거지'}], 'ceo');
+            break;
+        case 'alba':
+            drawUpgradePanel("알바 고용/관리", ALBA_DATA, 'alba');
+            break;
+        case 'asset':
+            drawUpgradePanel("자산 매입", ASSET_DATA, 'asset');
+            break;
+        default:
+            drawMainScreen();
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+// 게임 시작
+if (confirm("저장된 게임을 불러오시겠습니까?")) {
+    if (!loadGame()) {
+        alert("저장된 게임이 없습니다. 새로 시작합니다.");
+    }
+}
+
+// 초기 GPS 계산 및 게임 루프 시작
+recalculateGPS();
+gameLoop();
+
+</script>
+</body>
+</html>
+
